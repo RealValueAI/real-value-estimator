@@ -1,33 +1,31 @@
 from typing import Any, Dict
+import logging
 
+import pandas as pd
+import numpy as np
 from sklearn.model_selection import train_test_split
 
-from src.learning.preprocessing import RealEstatePreprocessor, PriceModel
+from src.learning.config import cat_features, config, features, target
+from src.learning.ml_model import PriceModel
+from src.learning.preprocessing import RealEstatePreprocessor
 
-config = {
-    'dtypes': { 'listing_id': 'int64', 'platform_id': 'int32', 'area': 'float64',
-                'rooms': 'Int32', 'floor': 'Int32', 'house_floors': 'Int32',
-                'mortgage_rate': 'float32' },
-    'parse_dates': ['published_date', 'updated_date'],
-    'array_columns': ['subway_distances', 'subway_names'],
-    'numeric_fillna': {'rooms': -1, 'floor': -1, 'house_floors': -1},
-    'bool_columns': ['pin_color', 'auction_status', 'placement_paid', 'big_card'],
-    'center_latitude': 55.751244, 'center_longitude': 37.618423
-}
 
-features = [
-    'mortgage_rate', 'area', 'rooms', 'floor',
-    'latitude', 'longitude',
-    'num_subways', 'subway_min_dist', 'subway_mean_dist',
-    'distance_to_center', 'lat_bucket', 'lon_bucket',
-    'days_since_published', 'days_since_updated',
-    'floor_ratio', 'rooms_density',
-    'desc_len', 'desc_word_count'
-]
-cat_features = ['platform_id', 'distance_bucket', 'primary_subway']
-target = 'price_per_sqm'
 
-def run_training_pipeline(data_path: str = 'data.parquet') -> Dict[str, Any]:
+
+def run_training_pipeline(
+    data_path: str = 'data.parquet',
+    tune_hyperparams: bool = True,
+    tune_trials: int = 10
+) -> Dict[str, Any]:
+    """
+    Полный pipeline тренировки модели:
+      - загрузка и предобработка данных,
+      - разделение на train/val/test,
+      - опциональная оптимизация гиперпараметров через Optuna,
+      - обучение с ранней остановкой,
+      - оценка на тесте,
+      - сохранение модели.
+    """
     preprocessor = RealEstatePreprocessor(**config)
     df = preprocessor.load_data(data_path)
     df = preprocessor.preprocess(df)
@@ -36,12 +34,40 @@ def run_training_pipeline(data_path: str = 'data.parquet') -> Dict[str, Any]:
 
     mask = y.notna()
     if not mask.any():
-        raise ValueError("нет таргета")
+        raise ValueError("Нет доступных значений таргета для обучения")
     X, y = X[mask], y[mask]
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    X_trainval, X_test, y_trainval, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_trainval, y_trainval, test_size=0.25, random_state=42
+    )
+
     model = PriceModel()
-    model.train(X_train, y_train, X_test, y_test, cat_features)
-    results = model.evaluate(X_test, y_test)
+    tuning_results: Dict[str, Any] = {}
+    if tune_hyperparams:
+        logger.info("Начало гиперпараметрического тюнинга Optuna")
+        tuning_results = model.tune(
+            X_train, y_train,
+            cat_features=cat_features,
+            n_trials=tune_trials
+        )
+        logger.info(f"Результаты тюнинга: {tuning_results}")
+
+    logger.info("Обучение модели с early stopping на валидации")
+    model.train(
+        X_train, y_train,
+        X_val, y_val,
+        cat_features=cat_features
+    )
+
+    logger.info("Оценка модели на тестовом наборе данных")
+    eval_results = model.evaluate(X_test, y_test)
+
     model.save('price_per_sqm_model.cbm')
-    return results
+
+    return {
+        'tuning': tuning_results,
+        'evaluation': eval_results
+    }

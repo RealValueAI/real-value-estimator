@@ -1,4 +1,5 @@
 import logging
+from typing import Literal
 
 import pandas as pd
 
@@ -43,14 +44,45 @@ def save_dataframe_to_parquet(df: pd.DataFrame, file_path: str) -> None:
     logging.info(f"DataFrame сохранен в Parquet файл: {file_path}")
 
 
-def refresh_data():
+def refresh_data(
+    epoch: Literal['learning', 'inference'],
+    output_file: str = 'data.parquet'
+) -> pd.DataFrame:
+    """
+    Загружает таблицу из ClickHouse по типу эпохи ('learning' or 'inference')
+    и сохраняет результат в Parquet.
+    """
+    # Select table based on epoch
+    if epoch == 'learning':
+        table = clickhouse_config.learning_table
+    elif epoch == 'inference':
+        table = clickhouse_config.inference_table
+    else:
+        raise ValueError(f"Unsupported epoch: {epoch}")
 
-    engine = create_clickhouse_engine(clickhouse_config)
-    table_full_name = f"dwh.{clickhouse_config.table_name}"
-    df = read_table_to_dataframe(engine, table_full_name)
-    output_file = "data.parquet"
+    if not table:
+        raise ValueError(f"Environment variable for {epoch}_table not set.")
 
-    save_dataframe_to_parquet(df, output_file)
+    full_table = f"{clickhouse_config.database}.{table}"
+
+    engine_url = (
+        f"clickhouse://{clickhouse_config.user}:{clickhouse_config.password}@"
+        f"{clickhouse_config.host}:{clickhouse_config.port_http}/"
+        f"{clickhouse_config.database}?protocol=http"
+    )
+    engine = create_engine(engine_url)
+
+    # Read full table into DataFrame
+    query = f"SELECT * FROM {full_table}"
+    df = pd.read_sql(query, engine)
+
+    # Save to Parquet
+    df.to_parquet(output_file, index=False)
+    logging.info(f"Saved {len(df)} rows from {full_table} to {output_file}")
+    return df
+
+
+
 
 def upload_group_labels(parquet_path: str, table_full_name: str):
     """

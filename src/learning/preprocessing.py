@@ -10,9 +10,7 @@ from catboost import CatBoostRegressor, Pool
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.model_selection import train_test_split
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from src.utils.logger import logger
 
 
 def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -133,50 +131,3 @@ class RealEstatePreprocessor:
         y = df[target]
         return X, y
 
-class PriceModel:
-    def __init__(self, params: Optional[Dict[str, Any]] = None):
-        self.params = params or {
-            'iterations': 1000,
-            'learning_rate': 0.05,
-            'depth': 6,
-            'eval_metric': 'RMSE',
-            'early_stopping_rounds': 50,
-            'random_seed': 42
-        }
-        self.model = CatBoostRegressor(**self.params)
-
-    def train(
-        self,
-        X_train: pd.DataFrame,
-        y_train: pd.Series,
-        X_val: Optional[pd.DataFrame] = None,
-        y_val: Optional[pd.Series] = None,
-        cat_features: Optional[List[str]] = None
-    ) -> None:
-        logger.info("Начало обучения модели")
-        if X_val is not None and y_val is not None and not y_val.empty:
-            self.model.fit(Pool(X_train, y_train, cat_features=cat_features),
-                           eval_set=Pool(X_val, y_val, cat_features=cat_features), verbose=100)
-        else:
-            self.model.fit(X_train, y_train, cat_features=cat_features, verbose=100)
-
-    def evaluate(self, X_test: pd.DataFrame, y_test: pd.Series) -> Dict[str, Any]:
-        preds = self.model.predict(X_test)
-        mae = mean_absolute_error(y_test, preds)
-        rmse = mean_squared_error(y_test, preds, squared=False)
-        mask = y_test != 0
-        mape = np.nan
-        if mask.any():
-            mape = np.mean(np.abs((y_test[mask] - preds[mask]) / y_test[mask])) * 100
-        feature_names = X_test.columns.tolist()
-        importances = self.model.get_feature_importance(type='FeatureImportance')
-        feat_imp = sorted(zip(feature_names, importances), key=lambda x: x[1], reverse=True)
-        logger.info(f"MAE: {mae:.2f}, RMSE: {rmse:.2f}, MAPE: {mape:.2f}%")
-        logger.info("Feature Importances:")
-        for feat, imp in feat_imp:
-            logger.info(f" {feat}: {imp:.4f}")
-        return {'mae': mae, 'rmse': rmse, 'mape': mape, 'feature_importances': feat_imp}
-
-    def save(self, path: str) -> None:
-        logger.info(f"Сохранение модели в {path}")
-        self.model.save_model(path)

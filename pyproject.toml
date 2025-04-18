@@ -18,6 +18,8 @@ clickhouse-driver = "^0.2.9"
 clickhouse-connect = "^0.8.17"
 python-dotenv = "^1.1.0"
 pyarrow = "^19.0.1"
+optuna = "^4.3.0"
+optuna-integration = {extras = ["catboost"], version = "^4.3.0"}
 
 
 [tool.poetry.group.dev.dependencies]
